@@ -3,9 +3,10 @@ import fitz  # PyMuPDF
 import pandas as pd
 from google import genai
 import time
+import re
 
 # Initialize Gemini API client
-client = genai.Client(api_key="AIzaSyCeZ8FVMarfFc2NQLT8CeoMYWK2I_0wmIA")  # Replace with your actual API key
+client = genai.Client(api_key="AIzaSyAP0aEV3jptSxup6wPUKOYIwKk_--1OXJo")  # Replace with your actual API key
 
 # Folder containing PDFs
 pdf_folder = "paper"
@@ -17,24 +18,25 @@ allowed_labels = {"Deep Learning", "Computer Vision", "Reinforcement Learning", 
 # Function to extract metadata using Gemini API
 def extract_metadata(text):
     prompt = f"""
-    You are an expert in analyzing research papers. Extract the following details:
+    You are an expert in analyzing research papers. Extract the following details only nothing more:
     - Title
     - Authors
     - University
-    - 3 best-suited topic labels (must be exactly 3 from: Deep Learning, Computer Vision, Reinforcement Learning, NLP, Optimization)
+    - 3 best-suited labels always 3 from: Deep Learning, Computer Vision, Reinforcement Learning, NLP, Optimization
 
-    If any information is missing, return 'Unknown'. Ensure exactly 3 labels are returned.
+    Ensure always exactly 3 labels are returned. If any information is missing, return 'Unknown'.
 
     Extract from this text:
     {text[:1000]}  # Limiting input to avoid long processing times
     """
 
     try:
-        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
         if response and hasattr(response, "text"):
             return response.text
     except Exception as e:
         print(f"API error: {e}")
+        return None
     
     return "Unknown"
 
@@ -60,12 +62,19 @@ for root, dirs, files in os.walk(pdf_folder):
 
                 # Get metadata from Gemini
                 metadata = extract_metadata(text)
-                time.sleep(25)  # Delay to prevent hitting rate limits
-
+                while metadata is None:
+                    time.sleep(30)  # Delay to prevent hitting rate limits
+                    print("Trying Again")
+                    metadata = extract_metadata(text)
+                print(metadata)
                 # Parse metadata response (assuming structured output)
                 title, authors, university, labels = "Unknown", "Unknown", "Unknown", "Unknown"
 
                 lines = metadata.split("\n")
+                
+
+                labels = "Unknown"  # Default if extraction fails
+
                 for line in lines:
                     if "Title:" in line:
                         title = line.replace("Title:", "").strip()
@@ -75,15 +84,19 @@ for root, dirs, files in os.walk(pdf_folder):
                         university = line.replace("University:", "").strip()
                     elif "Labels:" in line:
                         raw_labels = line.replace("Labels:", "").strip()
-                        labels_list = [lbl.strip() for lbl in raw_labels.split(",") if lbl.strip() in allowed_labels]
 
-                        # Ensure exactly 3 labels are returned
-                        if len(labels_list) == 3:
-                            labels = ", ".join(labels_list)
-                        elif len(labels_list) > 3:
-                            labels = ", ".join(labels_list[:3])
+                        # Remove unexpected characters & split
+                        raw_labels = re.sub(r'[^a-zA-Z, ]', '', raw_labels)  # Keep only words & commas
+                        labels_list = [lbl.strip() for lbl in raw_labels.split(",") if lbl.strip()]
+
+                        # Ensure labels are valid & exactly 3
+                        labels_list = [lbl for lbl in labels_list if lbl in allowed_labels]
+
+                        if len(labels_list) < 3:
+                            labels = "Unknown"  # If less than 3 valid labels
                         else:
-                            labels = "Unknown"
+                            labels = ", ".join(labels_list[:3])  # Pick the first 3
+
 
                 # Store data (saving full text instead of PDF path)
                 data.append([text, title, authors, year, university, labels])
